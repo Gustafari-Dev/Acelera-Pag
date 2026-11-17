@@ -1,0 +1,37 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "coincidencias": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "divergencias": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "informacoes_ausentes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "vinculo_valido": {
+      "type": "boolean"
+    },
+    "anexo_legivel": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "coincidencias",
+    "divergencias",
+    "informacoes_ausentes",
+    "vinculo_valido",
+    "anexo_legivel"
+  ],
+  "type": "object"
+}

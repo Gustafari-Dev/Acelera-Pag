@@ -1,0 +1,1 @@
+"""Persistência transacional SQLite."""

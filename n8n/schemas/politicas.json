@@ -1,0 +1,52 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "dias_desde_entrega": {
+      "type": "integer"
+    },
+    "elegivel_automatico": {
+      "type": "boolean"
+    },
+    "fundamentacao": {
+      "type": "string"
+    },
+    "citacoes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "documento": {
+            "type": "string"
+          },
+          "versao": {
+            "type": "string"
+          },
+          "secao": {
+            "type": "string"
+          },
+          "trecho": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "documento",
+          "versao",
+          "secao",
+          "trecho",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "dias_desde_entrega",
+    "elegivel_automatico",
+    "fundamentacao",
+    "citacoes"
+  ],
+  "type": "object"
+}

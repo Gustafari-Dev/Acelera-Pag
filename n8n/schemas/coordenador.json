@@ -1,0 +1,22 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "recomendacao": {
+      "enum": [
+        "APROVAR",
+        "PEDIR_INFORMACOES",
+        "REVISAO_HUMANA",
+        "REJEITAR"
+      ],
+      "type": "string"
+    },
+    "justificativa": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "recomendacao",
+    "justificativa"
+  ],
+  "type": "object"
+}

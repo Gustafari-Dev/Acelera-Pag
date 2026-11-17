@@ -1,0 +1,593 @@
+{
+  "$defs": {
+    "CasoEntrada": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "format": "uuid",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "pedido_id": {
+          "pattern": "^PED-\\d{3}$",
+          "title": "Pedido Id",
+          "type": "string"
+        },
+        "cliente_id": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cliente Id"
+        },
+        "cliente_nome": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cliente Nome"
+        },
+        "cpf": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpf"
+        },
+        "email": {
+          "maxLength": 254,
+          "minLength": 3,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
+          "title": "Email",
+          "type": "string"
+        },
+        "valor_solicitado": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Valor Solicitado"
+        },
+        "motivo": {
+          "$ref": "#/$defs/Motivo"
+        },
+        "relato": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Relato",
+          "type": "string"
+        },
+        "data_entrega_informada": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Entrega Informada"
+        },
+        "anexo_status": {
+          "$ref": "#/$defs/StatusAnexo",
+          "default": "AUSENTE"
+        }
+      },
+      "required": [
+        "case_id",
+        "pedido_id",
+        "email",
+        "valor_solicitado",
+        "motivo",
+        "relato"
+      ],
+      "title": "CasoEntrada",
+      "type": "object"
+    },
+    "Citacao": {
+      "additionalProperties": false,
+      "properties": {
+        "documento": {
+          "title": "Documento",
+          "type": "string"
+        },
+        "versao": {
+          "title": "Versao",
+          "type": "string"
+        },
+        "secao": {
+          "title": "Secao",
+          "type": "string"
+        },
+        "trecho": {
+          "title": "Trecho",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "documento",
+        "versao",
+        "secao",
+        "trecho",
+        "sha256"
+      ],
+      "title": "Citacao",
+      "type": "object"
+    },
+    "MetadadosAnalise": {
+      "additionalProperties": false,
+      "properties": {
+        "analise_id": {
+          "format": "uuid",
+          "title": "Analise Id",
+          "type": "string"
+        },
+        "modo": {
+          "title": "Modo",
+          "type": "string"
+        },
+        "motivo_modo_mock": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Motivo Modo Mock"
+        },
+        "modelo_usado": {
+          "title": "Modelo Usado",
+          "type": "string"
+        },
+        "modo_embeddings": {
+          "title": "Modo Embeddings",
+          "type": "string"
+        },
+        "iniciado_em": {
+          "format": "date-time",
+          "title": "Iniciado Em",
+          "type": "string"
+        },
+        "concluido_em": {
+          "format": "date-time",
+          "title": "Concluido Em",
+          "type": "string"
+        },
+        "tempo_total_ms": {
+          "minimum": 0,
+          "title": "Tempo Total Ms",
+          "type": "number"
+        },
+        "versao_pipeline": {
+          "title": "Versao Pipeline",
+          "type": "string"
+        },
+        "prompts_sha256": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Prompts Sha256",
+          "type": "object"
+        },
+        "rastreabilidade": {
+          "items": {
+            "$ref": "#/$defs/RastroEtapa"
+          },
+          "title": "Rastreabilidade",
+          "type": "array"
+        }
+      },
+      "required": [
+        "analise_id",
+        "modo",
+        "motivo_modo_mock",
+        "modelo_usado",
+        "modo_embeddings",
+        "iniciado_em",
+        "concluido_em",
+        "tempo_total_ms",
+        "versao_pipeline",
+        "prompts_sha256",
+        "rastreabilidade"
+      ],
+      "title": "MetadadosAnalise",
+      "type": "object"
+    },
+    "Motivo": {
+      "enum": [
+        "ARREPENDIMENTO",
+        "DEFEITO",
+        "OUTRO"
+      ],
+      "title": "Motivo",
+      "type": "string"
+    },
+    "ParecerCoordenador": {
+      "additionalProperties": false,
+      "properties": {
+        "recomendacao": {
+          "$ref": "#/$defs/Recomendacao"
+        },
+        "justificativa": {
+          "title": "Justificativa",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recomendacao",
+        "justificativa"
+      ],
+      "title": "ParecerCoordenador",
+      "type": "object"
+    },
+    "ParecerEvidencias": {
+      "additionalProperties": false,
+      "properties": {
+        "coincidencias": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Coincidencias",
+          "type": "array"
+        },
+        "divergencias": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Divergencias",
+          "type": "array"
+        },
+        "informacoes_ausentes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Informacoes Ausentes",
+          "type": "array"
+        },
+        "vinculo_valido": {
+          "title": "Vinculo Valido",
+          "type": "boolean"
+        },
+        "anexo_legivel": {
+          "title": "Anexo Legivel",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "coincidencias",
+        "divergencias",
+        "informacoes_ausentes",
+        "vinculo_valido",
+        "anexo_legivel"
+      ],
+      "title": "ParecerEvidencias",
+      "type": "object"
+    },
+    "ParecerPoliticas": {
+      "additionalProperties": false,
+      "properties": {
+        "dias_desde_entrega": {
+          "title": "Dias Desde Entrega",
+          "type": "integer"
+        },
+        "elegivel_automatico": {
+          "title": "Elegivel Automatico",
+          "type": "boolean"
+        },
+        "fundamentacao": {
+          "title": "Fundamentacao",
+          "type": "string"
+        },
+        "citacoes": {
+          "items": {
+            "$ref": "#/$defs/Citacao"
+          },
+          "title": "Citacoes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dias_desde_entrega",
+        "elegivel_automatico",
+        "fundamentacao",
+        "citacoes"
+      ],
+      "title": "ParecerPoliticas",
+      "type": "object"
+    },
+    "ParecerValidador": {
+      "additionalProperties": false,
+      "properties": {
+        "autorizado_execucao": {
+          "title": "Autorizado Execucao",
+          "type": "boolean"
+        },
+        "motivo_bloqueio": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Motivo Bloqueio"
+        },
+        "verificacoes": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "title": "Verificacoes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "autorizado_execucao",
+        "motivo_bloqueio",
+        "verificacoes"
+      ],
+      "title": "ParecerValidador",
+      "type": "object"
+    },
+    "Pedido": {
+      "additionalProperties": false,
+      "properties": {
+        "pedido_id": {
+          "pattern": "^PED-\\d{3}$",
+          "title": "Pedido Id",
+          "type": "string"
+        },
+        "cliente_id": {
+          "title": "Cliente Id",
+          "type": "string"
+        },
+        "cpf": {
+          "title": "Cpf",
+          "type": "string"
+        },
+        "cliente_nome": {
+          "title": "Cliente Nome",
+          "type": "string"
+        },
+        "itens": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Itens",
+          "type": "array"
+        },
+        "valor_pago": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Valor Pago"
+        },
+        "data_entrega": {
+          "format": "date",
+          "title": "Data Entrega",
+          "type": "string"
+        },
+        "compra_online": {
+          "title": "Compra Online",
+          "type": "boolean"
+        },
+        "data_referencia": {
+          "format": "date",
+          "title": "Data Referencia",
+          "type": "string"
+        },
+        "historico_estornos": {
+          "items": {
+            "$ref": "#/$defs/Reembolso"
+          },
+          "title": "Historico Estornos",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pedido_id",
+        "cliente_id",
+        "cpf",
+        "cliente_nome",
+        "itens",
+        "valor_pago",
+        "data_entrega",
+        "compra_online",
+        "data_referencia"
+      ],
+      "title": "Pedido",
+      "type": "object"
+    },
+    "RastroEtapa": {
+      "additionalProperties": false,
+      "properties": {
+        "etapa": {
+          "title": "Etapa",
+          "type": "string"
+        },
+        "duracao_ms": {
+          "minimum": 0,
+          "title": "Duracao Ms",
+          "type": "number"
+        },
+        "entrada_sha256": {
+          "title": "Entrada Sha256",
+          "type": "string"
+        },
+        "saida_sha256": {
+          "title": "Saida Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "etapa",
+        "duracao_ms",
+        "entrada_sha256",
+        "saida_sha256"
+      ],
+      "title": "RastroEtapa",
+      "type": "object"
+    },
+    "Recomendacao": {
+      "enum": [
+        "APROVAR",
+        "PEDIR_INFORMACOES",
+        "REVISAO_HUMANA",
+        "REJEITAR"
+      ],
+      "title": "Recomendacao",
+      "type": "string"
+    },
+    "Reembolso": {
+      "additionalProperties": false,
+      "properties": {
+        "transaction_id": {
+          "format": "uuid",
+          "title": "Transaction Id",
+          "type": "string"
+        },
+        "case_id": {
+          "format": "uuid",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "pedido_id": {
+          "pattern": "^PED-\\d{3}$",
+          "title": "Pedido Id",
+          "type": "string"
+        },
+        "valor": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Valor"
+        },
+        "status": {
+          "default": "CONCLUIDO",
+          "title": "Status",
+          "type": "string"
+        },
+        "criado_em": {
+          "format": "date-time",
+          "title": "Criado Em",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transaction_id",
+        "case_id",
+        "pedido_id",
+        "valor",
+        "criado_em"
+      ],
+      "title": "Reembolso",
+      "type": "object"
+    },
+    "StatusAnexo": {
+      "enum": [
+        "OK",
+        "ILEGIVEL",
+        "INCONSISTENTE",
+        "AUSENTE"
+      ],
+      "title": "StatusAnexo",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "caso": {
+      "$ref": "#/$defs/CasoEntrada"
+    },
+    "pedido_oficial": {
+      "$ref": "#/$defs/Pedido"
+    },
+    "parecer_evidencias": {
+      "$ref": "#/$defs/ParecerEvidencias"
+    },
+    "parecer_politicas": {
+      "$ref": "#/$defs/ParecerPoliticas"
+    },
+    "parecer_coordenador": {
+      "$ref": "#/$defs/ParecerCoordenador"
+    },
+    "validacao": {
+      "$ref": "#/$defs/ParecerValidador"
+    },
+    "autorizado_execucao": {
+      "title": "Autorizado Execucao",
+      "type": "boolean"
+    },
+    "motivo_bloqueio": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Motivo Bloqueio"
+    },
+    "metadados": {
+      "$ref": "#/$defs/MetadadosAnalise"
+    }
+  },
+  "required": [
+    "caso",
+    "pedido_oficial",
+    "parecer_evidencias",
+    "parecer_politicas",
+    "parecer_coordenador",
+    "validacao",
+    "autorizado_execucao",
+    "motivo_bloqueio",
+    "metadados"
+  ],
+  "title": "ResultadoAnalise",
+  "type": "object"
+}

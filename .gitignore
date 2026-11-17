@@ -1,0 +1,21 @@
+.venv/
+.tools/
+.cache/
+.env
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+data/*
+!data/.gitkeep
+!data/examples/
+!data/examples/*.json
+
+# Graphify (grafo local de código; nunca versionar)
+.graphify/
+graphify-out/
+*.graphify.*
+graph.json
+graph.html
+GRAPH_REPORT.md
+.graphify_*

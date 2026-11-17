@@ -1,0 +1,12 @@
+{
+  "case_id": "89d5a34e-086d-4c71-8bf0-c35afec826f1",
+  "pedido_id": "PED-003",
+  "cliente_id": "CLI-DIVERGENTE",
+  "cpf": "33333333333",
+  "email": "cliente@example.com",
+  "valor_solicitado": "999.00",
+  "motivo": "ARREPENDIMENTO",
+  "relato": "Desejo desistir da compra online.",
+  "data_entrega_informada": "2026-11-12",
+  "anexo_status": "ILEGIVEL"
+}

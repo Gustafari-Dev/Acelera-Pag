@@ -1,0 +1,719 @@
+{
+  "name": "Central de Reembolsos - agentes Python",
+  "nodes": [
+    {
+      "id": "b71434ff-983a-576f-85f0-b90fc61a6f24",
+      "name": "Entrada",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "central-reembolsos",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "52354db7-fd39-5265-b6c5-3249c8ea40fc"
+    },
+    {
+      "id": "5d0368ab-101f-5b1c-bba0-dd82265dc408",
+      "name": "Gerar caso",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Um evento por execução. O payload original permanece separado dos dados normalizados.\nconst { randomUUID } = require('crypto');\nconst item = $input.first();\nconst bruto = item.json.body ?? item.json;\nconst config = {\n  api_url: ($env.CENTRAL_API_URL || 'http://host.docker.internal:8000').replace(/\\/$/, ''),\n  bronze_folder: $env.GOOGLE_DRIVE_BRONZE_FOLDER_ID || '',\n  silver_folder: $env.GOOGLE_DRIVE_SILVER_FOLDER_ID || '',\n  gold_sheet: $env.GOOGLE_SHEETS_GOLD_ID || '',\n  gold_tab: $env.GOOGLE_SHEETS_GOLD_TAB || 'Reembolsos',\n  equipe_email: $env.EQUIPE_EMAIL || '',\n};\nfor (const key of ['bronze_folder', 'silver_folder', 'gold_sheet']) {\n  if (!config[key]) throw new Error(`Configuração obrigatória ausente: ${key}`);\n}\nreturn [{ json: {\n  bruto, case_id: bruto.case_id || randomUUID(), config,\n  recebido_em: new Date().toISOString(), origem: 'webhook',\n}, binary: item.binary }];\n"
+      }
+    },
+    {
+      "id": "cf9225bd-6d85-5d18-aa9c-4f68e3c103e6",
+      "name": "Preparar Bronze",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst ctx = item.json;\nconst prefixo = `${ctx.recebido_em.slice(0, 10)}_${ctx.origem}_${ctx.case_id}`;\nconst itens = [{\n  json: { nome_arquivo: `${prefixo}_evento.json` },\n  binary: { data: {\n    data: Buffer.from(JSON.stringify(ctx.bruto, null, 2), 'utf8').toString('base64'),\n    mimeType: 'application/json', fileName: `${prefixo}_evento.json`,\n  } },\n}];\nfor (const [campo, arquivo] of Object.entries(item.binary || {})) {\n  const nome = String(arquivo.fileName || campo).replace(/[^a-zA-Z0-9._-]/g, '_');\n  itens.push({\n    json: { nome_arquivo: `${prefixo}_${campo}_${nome}` },\n    binary: { data: arquivo },\n  });\n}\nreturn itens;\n"
+      }
+    },
+    {
+      "id": "3128d911-9d15-550e-afc9-51403f754243",
+      "name": "Salvar Bronze",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "inputDataFieldName": "data",
+        "name": "={{ $json.nome_arquivo }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Gerar caso').first().json.config.bronze_folder }}"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "aa2349b8-620a-58fa-9730-8916fd226690",
+      "name": "Normalizar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Gerar caso').first().json;\nconst bronze = $input.all().map(item => ({ id: item.json.id, nome: item.json.name }));\nif (bronze.some(item => !item.id)) throw new Error('Upload Bronze sem ID confirmado.');\nconst raw = ctx.bruto;\nconst textoValor = String(raw.valor_solicitado ?? '').trim();\nif (!/^\\d+(?:[.,]\\d{1,2})?$/.test(textoValor)) {\n  throw new Error('valor_solicitado deve usar reais sem separador de milhares.');\n}\nconst pedidoId = String(raw.pedido_id || '').trim().toUpperCase();\nif (!/^PED-\\d{3}$/.test(pedidoId)) throw new Error('pedido_id inválido.');\nconst caso = {\n  case_id: ctx.case_id, pedido_id: pedidoId,\n  cliente_id: raw.cliente_id == null ? null : String(raw.cliente_id).trim(),\n  cliente_nome: raw.cliente_nome == null ? null : String(raw.cliente_nome).trim(),\n  cpf: raw.cpf == null ? null : String(raw.cpf).replace(/\\D/g, ''),\n  email: String(raw.email || '').trim(),\n  valor_solicitado: textoValor.replace(',', '.'),\n  motivo: String(raw.motivo || 'OUTRO').trim().toUpperCase(),\n  relato: String(raw.relato || '').trim(),\n  data_entrega_informada: raw.data_entrega_informada || null,\n  anexo_status: String(raw.anexo_status || 'AUSENTE').trim().toUpperCase(),\n};\n// Não preencher lacunas usando o pedido oficial: isso esconderia ausência de evidência.\nconst silver = { schema_version: 'v1', caso, referencias_bronze: bronze };\nreturn [{\n  json: { ...ctx, caso, bronze },\n  binary: { data: {\n    data: Buffer.from(JSON.stringify(silver, null, 2), 'utf8').toString('base64'),\n    mimeType: 'application/json', fileName: `${ctx.case_id}_silver.json`,\n  } },\n}];\n"
+      }
+    },
+    {
+      "id": "0de12f51-11d8-5b1a-8f1c-b037847683e6",
+      "name": "Salvar Silver",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "inputDataFieldName": "data",
+        "name": "={{ $binary.data.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Gerar caso').first().json.config.silver_folder }}"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "443badb4-ac0d-5707-b044-0770c0219797",
+      "name": "Analisar caso",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Gerar caso').first().json.config.api_url + '/casos/analisar' }}",
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Normalizar').first().json.caso }}"
+      }
+    },
+    {
+      "id": "270d71e6-d205-55cd-8b0c-cfb30137affe",
+      "name": "Autorizado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1e87085c-baab-54cd-8a8a-0a7bb12a9d21",
+              "leftValue": "={{ $json.autorizado_execucao === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bc642883-8ffc-5cd2-a2af-2b0b2fa2c246",
+      "name": "Executar reembolso",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Gerar caso').first().json.config.api_url + '/reembolsos/executar' }}",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {pedido_id: $('Analisar caso').first().json.caso.pedido_id, case_id: $('Analisar caso').first().json.caso.case_id, valor: $('Analisar caso').first().json.caso.valor_solicitado} }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "1672db03-ba6e-5fc6-a86d-a24c9b7872b3",
+      "name": "Verificar historico",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Gerar caso').first().json.config.api_url + '/pedidos/' + $('Analisar caso').first().json.caso.pedido_id }}",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "b805720e-7596-5c6d-9ebb-feb0792c10f4",
+      "name": "Consolidar executado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Analisar caso').first().json;\nconst recibo = $('Executar reembolso').first().json;\nconst pedido = $input.first().json;\nconst salvo = pedido.historico_estornos?.find(item => item.transaction_id === recibo.transaction_id);\nif (!salvo || salvo.status !== 'CONCLUIDO' || salvo.case_id !== ctx.caso.case_id ||\n    salvo.pedido_id !== ctx.caso.pedido_id || recibo.case_id !== ctx.caso.case_id ||\n    Number(salvo.valor) !== Number(ctx.caso.valor_solicitado) ||\n    Number(recibo.valor) !== Number(ctx.caso.valor_solicitado) || recibo.status !== 'CONCLUIDO') {\n  throw new Error('Recibo de execução não confirmado no histórico oficial.');\n}\nreturn [{ json: { status_execucao: 'CONCLUIDO', transaction_id: salvo.transaction_id, erro: null } }];\n"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "81166bc9-c05b-5717-993b-4557147050a5",
+      "name": "Consolidar bloqueado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        -220
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{status_execucao:'BLOQUEADO',transaction_id:null,erro:null}}];"
+      }
+    },
+    {
+      "id": "4593ff61-f0c6-5c8a-9393-5fe92fbcf4a0",
+      "name": "Consolidar falha",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        220
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{status_execucao:'NAO_CONFIRMADO',transaction_id:null,erro:JSON.stringify($input.first().json)}}];"
+      }
+    },
+    {
+      "id": "01eafeb4-8fc2-5a49-acd9-0a0e5243b4f9",
+      "name": "Montar Gold",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const final = $input.first().json;\nconst analise = $('Analisar caso').first().json;\nconst ctx = $('Normalizar').first().json;\nconst erro = final.erro || analise.motivo_bloqueio || '';\nconst resultado = {\n  case_id: ctx.caso.case_id, pedido_id: ctx.caso.pedido_id, email: ctx.caso.email,\n  valor: analise.caso.valor_solicitado, recomendacao: analise.parecer_coordenador.recomendacao,\n  autorizado_execucao: analise.autorizado_execucao,\n  status_execucao: final.status_execucao, transaction_id: final.transaction_id || '',\n  motivo_bloqueio: erro, recebido_em: analise.metadados.iniciado_em,\n  bronze_ids: ctx.bronze.map(item => item.id).join(','), silver_id: $('Salvar Silver').first().json.id,\n  citacoes_json: JSON.stringify(analise.parecer_politicas.citacoes),\n  evidencias_json: JSON.stringify(analise.parecer_evidencias),\n  resultado_json: JSON.stringify({ analise, execucao: final }),\n};\nconst destino = final.status_execucao === 'NAO_CONFIRMADO' ? (ctx.config.equipe_email || ctx.caso.email) : ctx.caso.email;\nlet mensagem;\nif (final.status_execucao === 'CONCLUIDO') mensagem = `Reembolso simulado confirmado. Transação: ${final.transaction_id}.`;\nelse if (final.status_execucao === 'NAO_CONFIRMADO') mensagem = 'Execução sem confirmação. A equipe deve conciliar o histórico do pedido antes de abrir outra operação.';\nelse mensagem = `Caso encaminhado: ${analise.parecer_coordenador.recomendacao}. ${analise.parecer_coordenador.justificativa}`;\nreturn [{ json: { ...resultado, destinatario: destino, mensagem_email: `Caso ${ctx.caso.case_id}. ${mensagem}` } }];\n"
+      }
+    },
+    {
+      "id": "a0d01789-4c40-5901-9e06-ec241896e9f7",
+      "name": "Salvar Gold",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Gerar caso').first().json.config.gold_sheet }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Gerar caso').first().json.config.gold_tab }}"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "case_id": "={{ $json.case_id }}",
+            "pedido_id": "={{ $json.pedido_id }}",
+            "email": "={{ $json.email }}",
+            "valor": "={{ $json.valor }}",
+            "recomendacao": "={{ $json.recomendacao }}",
+            "autorizado_execucao": "={{ $json.autorizado_execucao }}",
+            "status_execucao": "={{ $json.status_execucao }}",
+            "transaction_id": "={{ $json.transaction_id }}",
+            "motivo_bloqueio": "={{ $json.motivo_bloqueio }}",
+            "recebido_em": "={{ $json.recebido_em }}",
+            "bronze_ids": "={{ $json.bronze_ids }}",
+            "silver_id": "={{ $json.silver_id }}",
+            "citacoes_json": "={{ $json.citacoes_json }}",
+            "evidencias_json": "={{ $json.evidencias_json }}",
+            "resultado_json": "={{ $json.resultado_json }}"
+          },
+          "matchingColumns": [
+            "case_id"
+          ],
+          "schema": [
+            {
+              "id": "case_id",
+              "displayName": "case_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "pedido_id",
+              "displayName": "pedido_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "valor",
+              "displayName": "valor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "recomendacao",
+              "displayName": "recomendacao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "autorizado_execucao",
+              "displayName": "autorizado_execucao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status_execucao",
+              "displayName": "status_execucao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "transaction_id",
+              "displayName": "transaction_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "motivo_bloqueio",
+              "displayName": "motivo_bloqueio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "recebido_em",
+              "displayName": "recebido_em",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "bronze_ids",
+              "displayName": "bronze_ids",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "silver_id",
+              "displayName": "silver_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "citacoes_json",
+              "displayName": "citacoes_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "evidencias_json",
+              "displayName": "evidencias_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "resultado_json",
+              "displayName": "resultado_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      }
+    },
+    {
+      "id": "76380d6a-cf49-5fb8-8c10-4ed3b0036da3",
+      "name": "Enviar resposta",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2860,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "emailType": "text",
+        "sendTo": "={{ $('Montar Gold').first().json.destinatario }}",
+        "subject": "={{ 'Central de Reembolsos - ' + $('Montar Gold').first().json.case_id }}",
+        "message": "={{ $('Montar Gold').first().json.mensagem_email }}",
+        "options": {
+          "appendAttribution": false
+        }
+      }
+    },
+    {
+      "id": "52d812f2-d3d6-5c67-8541-1f9e2a3b2711",
+      "name": "Responder webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        3080,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $('Montar Gold').first().json }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Entrada": {
+      "main": [
+        [
+          {
+            "node": "Gerar caso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar caso": {
+      "main": [
+        [
+          {
+            "node": "Preparar Bronze",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Bronze": {
+      "main": [
+        [
+          {
+            "node": "Salvar Bronze",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Bronze": {
+      "main": [
+        [
+          {
+            "node": "Normalizar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar": {
+      "main": [
+        [
+          {
+            "node": "Salvar Silver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Silver": {
+      "main": [
+        [
+          {
+            "node": "Analisar caso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analisar caso": {
+      "main": [
+        [
+          {
+            "node": "Autorizado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executar reembolso": {
+      "main": [
+        [
+          {
+            "node": "Verificar historico",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consolidar falha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar historico": {
+      "main": [
+        [
+          {
+            "node": "Consolidar executado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consolidar falha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar executado": {
+      "main": [
+        [
+          {
+            "node": "Montar Gold",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consolidar falha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar bloqueado": {
+      "main": [
+        [
+          {
+            "node": "Montar Gold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar falha": {
+      "main": [
+        [
+          {
+            "node": "Montar Gold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Gold": {
+      "main": [
+        [
+          {
+            "node": "Salvar Gold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Gold": {
+      "main": [
+        [
+          {
+            "node": "Enviar resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar resposta": {
+      "main": [
+        [
+          {
+            "node": "Responder webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Autorizado?": {
+      "main": [
+        [
+          {
+            "node": "Executar reembolso",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consolidar bloqueado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "versionId": "2b3b57e2-6f40-5c1f-9228-727ef5f89a6f",
+  "tags": []
+}

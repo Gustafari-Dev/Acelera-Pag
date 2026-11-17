@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "Motivo": {
+      "enum": [
+        "ARREPENDIMENTO",
+        "DEFEITO",
+        "OUTRO"
+      ],
+      "title": "Motivo",
+      "type": "string"
+    },
+    "StatusAnexo": {
+      "enum": [
+        "OK",
+        "ILEGIVEL",
+        "INCONSISTENTE",
+        "AUSENTE"
+      ],
+      "title": "StatusAnexo",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "format": "uuid",
+      "title": "Case Id",
+      "type": "string"
+    },
+    "pedido_id": {
+      "pattern": "^PED-\\d{3}$",
+      "title": "Pedido Id",
+      "type": "string"
+    },
+    "cliente_id": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cliente Id"
+    },
+    "cliente_nome": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cliente Nome"
+    },
+    "cpf": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cpf"
+    },
+    "email": {
+      "maxLength": 254,
+      "minLength": 3,
+      "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
+      "title": "Email",
+      "type": "string"
+    },
+    "valor_solicitado": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "title": "Valor Solicitado"
+    },
+    "motivo": {
+      "$ref": "#/$defs/Motivo"
+    },
+    "relato": {
+      "maxLength": 8000,
+      "minLength": 1,
+      "title": "Relato",
+      "type": "string"
+    },
+    "data_entrega_informada": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Data Entrega Informada"
+    },
+    "anexo_status": {
+      "$ref": "#/$defs/StatusAnexo",
+      "default": "AUSENTE"
+    }
+  },
+  "required": [
+    "case_id",
+    "pedido_id",
+    "email",
+    "valor_solicitado",
+    "motivo",
+    "relato"
+  ],
+  "title": "CasoEntrada",
+  "type": "object"
+}

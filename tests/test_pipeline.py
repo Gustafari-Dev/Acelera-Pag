@@ -7,10 +7,10 @@ import pytest
 from fastapi.testclient import TestClient
 from google import genai
 from google.genai import Client as OfficialGenaiClient
-from google.genai import types
+from google.genai import errors, types
 from pydantic import SecretStr
 
-from app.agents.gemini import GeminiAgents
+from app.agents.gemini import SCHEMAS_LLM, GeminiAgents
 from app.agents.prompts import PROMPTS
 from app.core.schemas import (
     CasoEntrada,
@@ -104,7 +104,8 @@ def install_gemini_double(monkeypatch, configuration, representation="model", tr
 
         def generate_content(self, **kwargs):
             calls.append(kwargs)
-            schema = kwargs["config"].response_schema
+            llm_schema = kwargs["config"].response_schema
+            schema = next(domain for domain, llm in SCHEMAS_LLM.items() if llm is llm_schema)
             context = json.loads(kwargs["contents"])
             if schema is ParecerEvidencias:
                 self.case = CasoEntrada.model_validate(context["caso"])
@@ -172,9 +173,9 @@ def test_gemini_schemas_and_endpoint_all_scenarios(
         assert result.metadados.modelo_usado == configuration.gemini_model
         assert len(calls) == 3
         assert [call["config"].response_schema for call in calls] == [
-            ParecerEvidencias,
-            ParecerPoliticas,
-            ParecerCoordenador,
+            SCHEMAS_LLM[ParecerEvidencias],
+            SCHEMAS_LLM[ParecerPoliticas],
+            SCHEMAS_LLM[ParecerCoordenador],
         ]
         for call, prompt in zip(calls, PROMPTS.values(), strict=True):
             assert call["config"].system_instruction == prompt
@@ -375,7 +376,12 @@ def test_official_sdk_serializes_all_pydantic_schemas_and_parses_network_json(
             assert method == "post"
             assert path.endswith(":generateContent")
             assert body["generationConfig"]["responseMimeType"] == "application/json"
-            assert body["generationConfig"].get("responseSchema")
+            response_schema = body["generationConfig"].get("responseSchema")
+            assert response_schema
+            # A Gemini Developer API responde 400 INVALID_ARGUMENT a estes campos.
+            serialized = json.dumps(response_schema)
+            for unsupported in ("additional_properties", "additionalProperties", "anyOf"):
+                assert unsupported not in serialized
     finally:
         adapter.close()
 
@@ -394,3 +400,47 @@ def test_invalid_later_stage_also_prevents_persisted_authorization(
         assert client.post("/casos/analisar", json=case).status_code == 502
         assert client.post("/reembolsos/executar", json=execute_for(case)).status_code == 403
         assert clients[0].closed
+
+
+def test_api_error_is_logged_with_status_but_never_secret_or_content(
+    configuration, monkeypatch, caplog
+):
+    def reject(schema, output):
+        raise errors.ClientError(
+            400,
+            {
+                "error": {
+                    "code": 400,
+                    "status": "INVALID_ARGUMENT",
+                    "message": "Chave credencial-ficticia-sem-rede rejeitada no response_schema.",
+                }
+            },
+        )
+
+    _, clients = install_gemini_double(monkeypatch, configuration, transform=reject)
+    with TestClient(create_app(configuration)) as client:
+        case = case_for(client)
+        with caplog.at_level("WARNING", logger="app.agents.gemini"):
+            assert client.post("/casos/analisar", json=case).status_code == 502
+        assert client.post("/reembolsos/executar", json=execute_for(case)).status_code == 403
+        assert clients[0].closed
+    logged = " | ".join(record.getMessage() for record in caplog.records)
+    assert "ClientError 400 INVALID_ARGUMENT" in logged
+    assert "credencial-ficticia-sem-rede" not in logged
+    assert case["relato"] not in logged
+    assert PROMPTS["evidencias"][:40] not in logged
+
+
+def test_validation_error_log_never_contains_model_output(configuration, monkeypatch, caplog):
+    leaked = "SEGREDO-NA-RESPOSTA-DO-MODELO"
+    install_gemini_double(
+        monkeypatch,
+        configuration,
+        transform=lambda schema, output: SimpleNamespace(parsed=None, text=f'{{"x": "{leaked}"}}'),
+    )
+    with TestClient(create_app(configuration)) as client:
+        with caplog.at_level("WARNING", logger="app.agents.gemini"):
+            assert client.post("/casos/analisar", json=case_for(client)).status_code == 502
+    logged = " | ".join(record.getMessage() for record in caplog.records)
+    assert "ValidationError" in logged
+    assert leaked not in logged

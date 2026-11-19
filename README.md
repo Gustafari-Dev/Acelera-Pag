@@ -174,7 +174,7 @@ Para os três agentes reais, mantendo a busca local com embeddings mock:
 USE_MOCK_LLM=false
 USE_MOCK_EMBEDDINGS=true
 GOOGLE_API_KEY=sua_chave_real
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.5-flash
 ```
 
 Para embeddings Gemini também, altere `USE_MOCK_EMBEDDINGS=false` e execute a

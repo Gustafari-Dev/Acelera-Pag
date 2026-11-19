@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     use_mock_llm: bool = True
     use_mock_embeddings: bool | None = None
     google_api_key: SecretStr = SecretStr("")
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
     gemini_embedding_model: str = "gemini-embedding-001"
     llm_timeout_seconds: int = Field(default=30, ge=1, le=300)
     database_url: str = "sqlite:///./data/reembolsos.db"

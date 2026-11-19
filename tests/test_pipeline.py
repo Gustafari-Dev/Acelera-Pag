@@ -1,6 +1,7 @@
 """Novo endpoint com quatro cenários, parsing real do SDK e travas obrigatórias."""
 
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +11,9 @@ from google.genai import Client as OfficialGenaiClient
 from google.genai import errors, types
 from pydantic import SecretStr
 
+from app.agents import gemini as gemini_module
 from app.agents.gemini import SCHEMAS_LLM, GeminiAgents
+from app.agents.pipeline import hidratar_citacoes
 from app.agents.prompts import PROMPTS
 from app.core.schemas import (
     CasoEntrada,
@@ -20,6 +23,8 @@ from app.core.schemas import (
     ParecerPoliticas,
     Pedido,
     Recomendacao,
+    ReferenciaCitacao,
+    RespostaPoliticas,
     ResultadoAnalise,
 )
 from app.main import create_app
@@ -91,6 +96,24 @@ def test_analyze_endpoint_mock_all_scenarios(client, order_id, decision, authori
     assert result.metadados.modelo_usado == "mock-deterministico-v1"
 
 
+def as_reference(parecer: ParecerPoliticas) -> RespostaPoliticas:
+    """O que o LLM devolve: o parecer sem trecho/sha256 nas citações."""
+    return RespostaPoliticas(
+        dias_desde_entrega=parecer.dias_desde_entrega,
+        elegivel_automatico=parecer.elegivel_automatico,
+        fundamentacao=parecer.fundamentacao,
+        citacoes=[
+            ReferenciaCitacao(
+                documento=item.documento,
+                versao=item.versao,
+                secao=item.secao,
+                relevancia="Norma aplicável ao motivo.",
+            )
+            for item in parecer.citacoes
+        ],
+    )
+
+
 def install_gemini_double(monkeypatch, configuration, representation="model", transform=None):
     calls, clients = [], []
     configuration.use_mock_llm = False
@@ -100,6 +123,8 @@ def install_gemini_double(monkeypatch, configuration, representation="model", tr
         def __init__(self, **kwargs):
             self.options, self.models, self.closed = kwargs, self, False
             self.case, self.order = None, None
+            # Evidências e Políticas rodam em paralelo; Políticas espera o caso decodificado.
+            self.case_ready = threading.Event()
             clients.append(self)
 
         def generate_content(self, **kwargs):
@@ -110,12 +135,16 @@ def install_gemini_double(monkeypatch, configuration, representation="model", tr
             if schema is ParecerEvidencias:
                 self.case = CasoEntrada.model_validate(context["caso"])
                 self.order = Pedido.model_validate(context["pedido_oficial"])
+                self.case_ready.set()
                 output = analisar_evidencias(self.case, self.order)
-            elif schema is ParecerPoliticas:
-                output = analisar_politicas(
-                    self.case,
-                    self.order,
-                    [Citacao.model_validate(item) for item in context["trechos"]],
+            elif schema is RespostaPoliticas:
+                assert self.case_ready.wait(5)
+                output = as_reference(
+                    analisar_politicas(
+                        self.case,
+                        self.order,
+                        [Citacao.model_validate(item) for item in context["trechos"]],
+                    )
                 )
             elif schema is ParecerCoordenador:
                 output = coordenar_caso(
@@ -172,14 +201,18 @@ def test_gemini_schemas_and_endpoint_all_scenarios(
         assert result.metadados.modo == "gemini"
         assert result.metadados.modelo_usado == configuration.gemini_model
         assert len(calls) == 3
-        assert [call["config"].response_schema for call in calls] == [
-            SCHEMAS_LLM[ParecerEvidencias],
-            SCHEMAS_LLM[ParecerPoliticas],
-            SCHEMAS_LLM[ParecerCoordenador],
-        ]
-        for call, prompt in zip(calls, PROMPTS.values(), strict=True):
-            assert call["config"].system_instruction == prompt
+        by_schema = {call["config"].response_schema: call for call in calls}
+        # As duas primeiras são concorrentes (ordem livre); o Coordenador é sempre o último.
+        assert calls[-1]["config"].response_schema is SCHEMAS_LLM[ParecerCoordenador]
+        for name, domain in zip(
+            PROMPTS, (ParecerEvidencias, RespostaPoliticas, ParecerCoordenador), strict=True
+        ):
+            call = by_schema[SCHEMAS_LLM[domain]]
+            assert call["config"].system_instruction == PROMPTS[name]
             assert call["config"].response_mime_type == "application/json"
+            assert call["config"].thinking_config is None
+        etapas = [trace.etapa for trace in result.metadados.rastreabilidade]
+        assert etapas.index("analista_evidencias") < etapas.index("analista_politicas")
         assert clients[0].closed
         assert clients[0].options["http_options"].timeout == 30000
         repeat = client.post("/casos/analisar", json=case)
@@ -219,7 +252,8 @@ def test_invalid_gemini_responses_fail_without_authorization(
         case = case_for(client)
         response = client.post("/casos/analisar", json=case)
         assert response.status_code == 502
-        assert len(calls) == 1
+        # Evidências e Políticas são disparadas juntas; o Coordenador nunca é chamado.
+        assert len(calls) == 2
         assert clients[0].closed
         assert client.post("/reembolsos/executar", json=execute_for(case)).status_code == 403
         with client.app.state.database.connection() as connection:
@@ -253,10 +287,17 @@ def test_gemini_network_error_does_not_silently_switch_to_mock(configuration, mo
         assert clients[0].closed
 
 
-def test_wrong_citation_blocks_even_if_gemini_coordinator_approves(configuration, monkeypatch):
+def test_invented_citation_blocks_even_if_gemini_coordinator_approves(configuration, monkeypatch):
     def forge(schema, output):
-        if schema is ParecerPoliticas:
-            output.citacoes[0].trecho = "Norma criada pelo modelo."
+        if schema is RespostaPoliticas:
+            output.citacoes.append(
+                ReferenciaCitacao(
+                    documento="cdc_artigos_selecionados",
+                    versao="v1",
+                    secao="Seção 9.9",
+                    relevancia="Norma criada pelo modelo.",
+                )
+            )
         if schema is ParecerCoordenador:
             output.recomendacao = Recomendacao.APROVAR
 
@@ -267,6 +308,9 @@ def test_wrong_citation_blocks_even_if_gemini_coordinator_approves(configuration
         assert response.status_code == 200
         assert not response.json()["autorizado_execucao"]
         assert "citacao_normativa_valida" in response.json()["motivo_bloqueio"]
+        politicas = response.json()["parecer_politicas"]
+        assert politicas["citacoes_rejeitadas"] == ["cdc_artigos_selecionados/v1/Seção 9.9"]
+        assert all(item["secao"] != "Seção 9.9" for item in politicas["citacoes"])
         assert client.post("/reembolsos/executar", json=execute_for(case)).status_code == 403
 
 
@@ -340,7 +384,7 @@ def test_official_sdk_serializes_all_pydantic_schemas_and_parses_network_json(
     client, configuration, monkeypatch
 ):
     envelope = payload_for(client)
-    expected = [envelope.evidencias, envelope.politicas, envelope.coordenador]
+    expected = [envelope.evidencias, as_reference(envelope.politicas), envelope.coordenador]
     official = OfficialGenaiClient(api_key="chave-ficticia-do-transporte", vertexai=False)
     requests = []
 
@@ -386,7 +430,7 @@ def test_official_sdk_serializes_all_pydantic_schemas_and_parses_network_json(
         adapter.close()
 
 
-@pytest.mark.parametrize("stage", [ParecerPoliticas, ParecerCoordenador])
+@pytest.mark.parametrize("stage", [RespostaPoliticas, ParecerCoordenador])
 def test_invalid_later_stage_also_prevents_persisted_authorization(
     configuration, monkeypatch, stage
 ):
@@ -444,3 +488,148 @@ def test_validation_error_log_never_contains_model_output(configuration, monkeyp
     logged = " | ".join(record.getMessage() for record in caplog.records)
     assert "ValidationError" in logged
     assert leaked not in logged
+
+
+def server_error(code=503, status="UNAVAILABLE"):
+    return errors.ServerError(
+        code, {"error": {"code": code, "status": status, "message": "high demand"}}
+    )
+
+
+def test_evidence_and_policy_agents_run_concurrently(configuration, monkeypatch):
+    # Se as duas chamadas fossem sequenciais, a barreira estouraria o timeout e daria 502.
+    barrier = threading.Barrier(2, timeout=5)
+
+    def meet(schema, output):
+        if schema in (ParecerEvidencias, RespostaPoliticas):
+            barrier.wait()
+
+    calls, clients = install_gemini_double(monkeypatch, configuration, transform=meet)
+    with TestClient(create_app(configuration)) as client:
+        response = client.post("/casos/analisar", json=case_for(client))
+        assert response.status_code == 200, response.text
+        assert len(calls) == 3
+        assert clients[0].closed
+
+
+@pytest.mark.parametrize("code,status", [(503, "UNAVAILABLE"), (504, "DEADLINE_EXCEEDED")])
+def test_transient_provider_error_is_retried_once(configuration, monkeypatch, code, status):
+    monkeypatch.setattr(gemini_module, "ESPERA_RETRY_SEGUNDOS", 0)
+    failed = set()
+    lock = threading.Lock()
+
+    def flaky(schema, output):
+        with lock:
+            if schema not in failed:
+                failed.add(schema)
+                raise server_error(code, status)
+
+    calls, _ = install_gemini_double(monkeypatch, configuration, transform=flaky)
+    with TestClient(create_app(configuration)) as client:
+        case = case_for(client)
+        response = client.post("/casos/analisar", json=case)
+        assert_result(client, case, response, "APROVAR", True)
+        assert len(calls) == 6
+
+
+def test_persistent_overload_fails_closed_after_single_retry(configuration, monkeypatch):
+    monkeypatch.setattr(gemini_module, "ESPERA_RETRY_SEGUNDOS", 0)
+
+    def overloaded(schema, output):
+        raise server_error()
+
+    calls, clients = install_gemini_double(monkeypatch, configuration, transform=overloaded)
+    with TestClient(create_app(configuration)) as client:
+        case = case_for(client)
+        assert client.post("/casos/analisar", json=case).status_code == 502
+        assert client.post("/reembolsos/executar", json=execute_for(case)).status_code == 403
+        assert len(calls) == 4  # Evidências e Políticas: 1 tentativa + 1 retry cada.
+        assert clients[0].closed
+
+
+def test_non_transient_client_error_is_not_retried(configuration, monkeypatch):
+    monkeypatch.setattr(gemini_module, "ESPERA_RETRY_SEGUNDOS", 0)
+
+    def invalid(schema, output):
+        raise errors.ClientError(
+            400, {"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "schema"}}
+        )
+
+    calls, _ = install_gemini_double(monkeypatch, configuration, transform=invalid)
+    with TestClient(create_app(configuration)) as client:
+        assert client.post("/casos/analisar", json=case_for(client)).status_code == 502
+        assert len(calls) == 2
+
+
+def test_thinking_level_is_sent_only_when_configured(configuration, monkeypatch):
+    calls, _ = install_gemini_double(monkeypatch, configuration)
+    configuration.gemini_thinking_level = "low"
+    with TestClient(create_app(configuration)) as client:
+        assert client.post("/casos/analisar", json=case_for(client)).status_code == 200
+    assert {call["config"].thinking_config.thinking_level for call in calls} == {
+        types.ThinkingLevel.LOW
+    }
+
+
+def test_policy_citations_are_hydrated_from_retrieved_chunks(configuration, monkeypatch):
+    calls, _ = install_gemini_double(monkeypatch, configuration)
+    with TestClient(create_app(configuration)) as client:
+        case = case_for(client)
+        response = client.post("/casos/analisar", json=case)
+        result = assert_result(client, case, response, "APROVAR", True)
+        policy_call = next(
+            call
+            for call in calls
+            if call["config"].response_schema is SCHEMAS_LLM[RespostaPoliticas]
+        )
+        retrieved = {
+            (item["documento"], item["versao"], item["secao"]): item
+            for item in json.loads(policy_call["contents"])["trechos"]
+        }
+        assert result.parecer_politicas.citacoes_rejeitadas == []
+        for citation in result.parecer_politicas.citacoes:
+            assert citation.model_dump() == retrieved[citation.key]
+            assert client.app.state.retriever.valid(citation)
+
+
+def test_llm_policy_schema_never_asks_for_citation_text():
+    fields = SCHEMAS_LLM[RespostaPoliticas].model_json_schema()["$defs"]["ReferenciaLLM"]
+    assert set(fields["properties"]) == {"documento", "versao", "secao", "relevancia"}
+
+
+def test_model_supplied_citation_text_is_rejected(configuration, monkeypatch):
+    # O contrato estrito proíbe o modelo de enviar trecho próprio junto da referência.
+    def smuggle(schema, output):
+        if schema is RespostaPoliticas:
+            data = output.model_dump(mode="json")
+            data["citacoes"][0]["trecho"] = "Texto normativo forjado."
+            return SimpleNamespace(parsed=None, text=json.dumps(data))
+
+    install_gemini_double(monkeypatch, configuration, transform=smuggle)
+    with TestClient(create_app(configuration)) as client:
+        case = case_for(client)
+        assert client.post("/casos/analisar", json=case).status_code == 502
+        assert client.post("/reembolsos/executar", json=execute_for(case)).status_code == 403
+
+
+def test_hydration_rejects_unretrieved_sections_and_deduplicates():
+    retrieved = [
+        Citacao(documento="doc", versao="v1", secao="Seção 1", trecho="Texto 1", sha256="a"),
+        Citacao(documento="doc", versao="v1", secao="Seção 2", trecho="Texto 2", sha256="b"),
+    ]
+
+    def ref(secao, versao="v1"):
+        return ReferenciaCitacao(documento="doc", versao=versao, secao=secao, relevancia="x")
+
+    parecer = hidratar_citacoes(
+        RespostaPoliticas(
+            dias_desde_entrega=2,
+            elegivel_automatico=True,
+            fundamentacao="ok",
+            citacoes=[ref("Seção 2"), ref("Seção 2"), ref("Seção 1", versao="v2"), ref("Seção 9")],
+        ),
+        retrieved,
+    )
+    assert parecer.citacoes == [retrieved[1]]
+    assert parecer.citacoes_rejeitadas == ["doc/v2/Seção 1", "doc/v1/Seção 9"]
+    assert parecer.dias_desde_entrega == 2 and parecer.elegivel_automatico

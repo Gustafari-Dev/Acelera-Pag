@@ -331,7 +331,8 @@ configurados no backend; o n8n não precisa de credencial Gemini.
 | `GOOGLE_API_KEY` | SDK Gemini no backend; não é necessária no mock |
 | `GEMINI_EMBEDDING_MODEL` | Modelo de vetorização real |
 | `GEMINI_MODEL` | Modelo dos três agentes Python |
-| `LLM_TIMEOUT_SECONDS` | Timeout por chamada ao SDK de agentes e embeddings, em segundos |
+| `GEMINI_THINKING_LEVEL` | Opcional (`minimal`, `low`, `medium`, `high`); omitido usa o padrão do modelo. Nem todo modelo aceita todo nível (a API responde 400) |
+| `LLM_TIMEOUT_SECONDS` | Timeout por chamada ao SDK de agentes e embeddings, em segundos. Erros 503/504 têm 1 nova tentativa após 1 s; mantenha `2 × (2 × timeout + 1)` abaixo de 180 s |
 | `DATABASE_URL` | Arquivo SQLite; `:memory:` não é aceito |
 | `CHROMA_PERSIST_DIR` / `POLICY_DOCS_DIR` | Índice e documentos, relativos à raiz ou absolutos |
 | `LIMITE_ALCADA_AUTOMATICA` | Limite em reais; padrão 1000,00 |

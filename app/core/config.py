@@ -3,6 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import Field, SecretStr, model_validator
@@ -21,6 +22,9 @@ class Settings(BaseSettings):
     google_api_key: SecretStr = SecretStr("")
     gemini_model: str = "gemini-3.5-flash-lite"
     gemini_embedding_model: str = "gemini-embedding-001"
+    # Opcional e dependente do modelo: a API rejeita (400) níveis que o modelo não suporta,
+    # e thinking_budget=0 é recusado pela família 3.x. Ausente = padrão do modelo.
+    gemini_thinking_level: Literal["minimal", "low", "medium", "high"] | None = None
     llm_timeout_seconds: int = Field(default=30, ge=1, le=300)
     database_url: str = "sqlite:///./data/reembolsos.db"
     chroma_persist_dir: Path = ROOT / "data/chroma"

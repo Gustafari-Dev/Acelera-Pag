@@ -316,6 +316,13 @@
           },
           "title": "Citacoes",
           "type": "array"
+        },
+        "citacoes_rejeitadas": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Citacoes Rejeitadas",
+          "type": "array"
         }
       },
       "required": [

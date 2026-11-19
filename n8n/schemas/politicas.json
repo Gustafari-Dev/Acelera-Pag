@@ -1,5 +1,6 @@
 {
   "additionalProperties": false,
+  "description": "Saída bruta do Analista de Políticas, antes da hidratação das citações.",
   "properties": {
     "dias_desde_entrega": {
       "type": "integer"
@@ -13,6 +14,7 @@
     "citacoes": {
       "items": {
         "additionalProperties": false,
+        "description": "Citação como o LLM a devolve: só a chave; trecho e sha256 vêm do RAG.",
         "properties": {
           "documento": {
             "type": "string"
@@ -23,10 +25,8 @@
           "secao": {
             "type": "string"
           },
-          "trecho": {
-            "type": "string"
-          },
-          "sha256": {
+          "relevancia": {
+            "maxLength": 300,
             "type": "string"
           }
         },
@@ -34,8 +34,7 @@
           "documento",
           "versao",
           "secao",
-          "trecho",
-          "sha256"
+          "relevancia"
         ],
         "type": "object"
       },

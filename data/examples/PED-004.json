@@ -1,5 +1,5 @@
 {
-  "case_id": "0777ac0d-b76d-40c3-9afd-cfdbcbfb860c",
+  "case_id": "1ab552ba-be25-474f-887f-dbf946553b82",
   "pedido_id": "PED-004",
   "cliente_id": "CLI-004",
   "cpf": "44444444444",
@@ -7,6 +7,6 @@
   "valor_solicitado": "89.9",
   "motivo": "ARREPENDIMENTO",
   "relato": "Desejo desistir da compra online.",
-  "data_entrega_informada": "2026-11-15",
+  "data_entrega_informada": "2026-11-18",
   "anexo_status": "OK"
 }

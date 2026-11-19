@@ -47,7 +47,11 @@ def validar(
             or normalize_customer_name(caso.cliente_nome)
             == normalize_customer_name(pedido.cliente_nome)
         ),
-        "citacao_normativa_valida": bool(checked) and len(checked) == len(citations),
+        "citacao_normativa_valida": (
+            bool(checked)
+            and len(checked) == len(citations)
+            and not payload.politicas.citacoes_rejeitadas
+        ),
         "citacao_aplicavel": applicable,
         "dentro_da_alcada": caso.valor_solicitado <= limite,
         "anexo_consistente": caso.anexo_status == StatusAnexo.OK,

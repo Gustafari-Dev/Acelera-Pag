@@ -2,10 +2,11 @@
 
 import argparse
 import json
+import sys
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from time import sleep
+from time import perf_counter, sleep
 from uuid import uuid4
 
 import httpx
@@ -35,8 +36,23 @@ def run_scenarios(client: httpx.Client | TestClient, *, execute: bool) -> list[d
             data_entrega_informada=order.data_entrega,
             anexo_status="ILEGIVEL" if index == 3 else "OK",
         )
+        started = perf_counter()
         response = client.post("/casos/analisar", json=case.model_dump(mode="json"))
-        response.raise_for_status()
+        elapsed_ms = round((perf_counter() - started) * 1000)
+        if response.status_code != 200:
+            # 502 = falha do agente (detalhe no log do Uvicorn); registra e segue para o próximo.
+            try:
+                detail = response.json().get("detail")
+            except ValueError:
+                detail = response.text[:300]
+            summaries.append(
+                {
+                    "pedido_id": case.pedido_id,
+                    "erro": f"HTTP {response.status_code}: {detail}",
+                    "tempo_cliente_ms": elapsed_ms,
+                }
+            )
+            continue
         analysis = response.json()
         attempts, transaction = [], None
         if execute and analysis["autorizado_execucao"]:
@@ -67,6 +83,7 @@ def run_scenarios(client: httpx.Client | TestClient, *, execute: bool) -> list[d
                 "modo": analysis["metadados"]["modo"],
                 "modelo": analysis["metadados"]["modelo_usado"],
                 "tempo_ms": analysis["metadados"]["tempo_total_ms"],
+                "tempo_cliente_ms": elapsed_ms,
                 "tentativas_http": attempts,
                 "transaction_id": transaction,
             }
@@ -84,7 +101,8 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.api_url:
-        with httpx.Client(base_url=args.api_url.rstrip("/"), timeout=180) as client:
+        # Alinhado ao nó "Analisar caso" do n8n (180 s): cobre timeout + retry dos agentes.
+        with httpx.Client(base_url=args.api_url.rstrip("/"), timeout=180.0) as client:
             summaries = run_scenarios(client, execute=args.executar)
     else:
         with TemporaryDirectory(prefix="reembolsos-demo-") as directory:
@@ -99,6 +117,8 @@ def main() -> None:
             with TestClient(create_app(settings)) as client:
                 summaries = run_scenarios(client, execute=True)
     print(json.dumps(summaries, ensure_ascii=False, indent=2))
+    if any("erro" in summary for summary in summaries):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

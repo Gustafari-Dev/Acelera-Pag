@@ -1,5 +1,5 @@
 {
-  "case_id": "89d5a34e-086d-4c71-8bf0-c35afec826f1",
+  "case_id": "a4f21dbe-fd98-4930-b61c-8a888dbad89b",
   "pedido_id": "PED-003",
   "cliente_id": "CLI-DIVERGENTE",
   "cpf": "33333333333",
@@ -7,6 +7,6 @@
   "valor_solicitado": "999.00",
   "motivo": "ARREPENDIMENTO",
   "relato": "Desejo desistir da compra online.",
-  "data_entrega_informada": "2026-11-12",
+  "data_entrega_informada": "2026-11-15",
   "anexo_status": "ILEGIVEL"
 }

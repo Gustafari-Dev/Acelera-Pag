@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from typing import TypeVar
 
 from google import genai
@@ -13,12 +14,17 @@ from app.core.errors import DomainError
 from app.core.schemas import (
     ParecerCoordenador,
     ParecerEvidencias,
-    ParecerPoliticas,
     Recomendacao,
+    RespostaPoliticas,
 )
 
 logger = logging.getLogger(__name__)
 Output = TypeVar("Output", bound=BaseModel)
+
+# Sobrecarga momentânea do provedor: uma única nova tentativa curta. Persistindo, 502.
+STATUS_TRANSITORIOS = frozenset({503, 504})
+NOVAS_TENTATIVAS = 1
+ESPERA_RETRY_SEGUNDOS = 1.0
 
 
 # Contratos enviados como response_schema. Só usam tipos que a API REST do Gemini aceita
@@ -30,12 +36,13 @@ class _SaidaLLM(BaseModel):
     pass
 
 
-class CitacaoLLM(_SaidaLLM):
+class ReferenciaLLM(_SaidaLLM):
+    # Só a chave da seção: o trecho integral e o sha256 são anexados pelo backend a partir
+    # dos chunks recuperados (pipeline.hidratar_citacoes), sem o modelo reescrevê-los.
     documento: str
     versao: str
     secao: str
-    trecho: str
-    sha256: str
+    relevancia: str
 
 
 class EvidenciasLLM(_SaidaLLM):
@@ -50,7 +57,7 @@ class PoliticasLLM(_SaidaLLM):
     dias_desde_entrega: int
     elegivel_automatico: bool
     fundamentacao: str
-    citacoes: list[CitacaoLLM]
+    citacoes: list[ReferenciaLLM]
 
 
 class CoordenadorLLM(_SaidaLLM):
@@ -60,7 +67,7 @@ class CoordenadorLLM(_SaidaLLM):
 
 SCHEMAS_LLM: dict[type[BaseModel], type[_SaidaLLM]] = {
     ParecerEvidencias: EvidenciasLLM,
-    ParecerPoliticas: PoliticasLLM,
+    RespostaPoliticas: PoliticasLLM,
     ParecerCoordenador: CoordenadorLLM,
 }
 
@@ -81,6 +88,13 @@ class GeminiAgents:
     def __init__(self, settings: Settings) -> None:
         self.model = settings.gemini_model
         self._secret = settings.google_api_key
+        self._thinking = (
+            types.ThinkingConfig(
+                thinking_level=types.ThinkingLevel(settings.gemini_thinking_level.upper())
+            )
+            if settings.gemini_thinking_level
+            else None
+        )
         try:
             self.client = genai.Client(
                 api_key=settings.google_api_key.get_secret_value(),
@@ -93,9 +107,27 @@ class GeminiAgents:
         except Exception as exc:
             raise DomainError(502, "Não foi possível iniciar o cliente Gemini.") from exc
 
+    def _generate_with_retry(self, agent: str, **request) -> types.GenerateContentResponse:
+        for attempt in range(NOVAS_TENTATIVAS + 1):
+            try:
+                return self.client.models.generate_content(**request)
+            except errors.APIError as exc:
+                if exc.code not in STATUS_TRANSITORIOS or attempt == NOVAS_TENTATIVAS:
+                    raise
+                logger.warning(
+                    "Agente %s: %s %s transitório; nova tentativa em %.1fs",
+                    agent,
+                    exc.code,
+                    exc.status or "UNKNOWN",
+                    ESPERA_RETRY_SEGUNDOS,
+                )
+                time.sleep(ESPERA_RETRY_SEGUNDOS)
+        raise AssertionError("inalcançável")
+
     def generate(self, agent: str, prompt: str, context: dict, schema: type[Output]) -> Output:
         try:
-            response = self.client.models.generate_content(
+            response = self._generate_with_retry(
+                agent,
                 model=self.model,
                 contents=json.dumps(context, ensure_ascii=False, sort_keys=True),
                 config=types.GenerateContentConfig(
@@ -104,6 +136,7 @@ class GeminiAgents:
                     response_schema=SCHEMAS_LLM[schema],
                     temperature=0,
                     max_output_tokens=8192,
+                    thinking_config=self._thinking,
                 ),
             )
             feedback = getattr(response, "prompt_feedback", None)

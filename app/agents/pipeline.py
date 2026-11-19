@@ -1,8 +1,13 @@
-"""Orquestra os três agentes em sequência e sempre passa pelo validador Python."""
+"""Orquestra os três agentes e sempre passa pelo validador Python.
+
+Evidências e Políticas são independentes e rodam em paralelo; o Coordenador consome
+ambos.
+"""
 
 import hashlib
 import json
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
 from typing import TypeVar
 from uuid import uuid4
@@ -15,11 +20,13 @@ from app.core.errors import DomainError
 from app.core.schemas import (
     CasoEntrada,
     CasoResultado,
+    Citacao,
     MetadadosAnalise,
     ParecerCoordenador,
     ParecerEvidencias,
     ParecerPoliticas,
     RastroEtapa,
+    RespostaPoliticas,
     ResultadoAnalise,
     ValidacaoEntrada,
 )
@@ -41,6 +48,32 @@ def digest(value) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def hidratar_citacoes(resposta: RespostaPoliticas, trechos: list[Citacao]) -> ParecerPoliticas:
+    """Anexa trecho e sha256 às referências do LLM a partir dos chunks recuperados.
+
+    Só vale referência presente nos trechos desta análise; as demais são descartadas do
+    parecer e registradas em citacoes_rejeitadas, o que bloqueia a execução no validador.
+    """
+    recuperados = {trecho.key: trecho for trecho in trechos}
+    citacoes: list[Citacao] = []
+    rejeitadas: list[str] = []
+    for referencia in resposta.citacoes:
+        trecho = recuperados.get(referencia.key)
+        if trecho is None:
+            chave = "/".join(referencia.key)
+            if chave not in rejeitadas:
+                rejeitadas.append(chave)
+        elif trecho not in citacoes:
+            citacoes.append(trecho.model_copy())
+    return ParecerPoliticas(
+        dias_desde_entrega=resposta.dias_desde_entrega,
+        elegivel_automatico=resposta.elegivel_automatico,
+        fundamentacao=resposta.fundamentacao,
+        citacoes=citacoes,
+        citacoes_rejeitadas=rejeitadas,
+    )
+
+
 def executar_pipeline_analise(
     caso: CasoEntrada, db: Session, *, retriever: PolicyRetriever | None = None
 ) -> ResultadoAnalise:
@@ -53,17 +86,20 @@ def executar_pipeline_analise(
     timer = perf_counter()
     traces: list[RastroEtapa] = []
 
-    def step(name: str, inputs, operation: Callable[[], Value]) -> Value:
+    def measure(name: str, inputs, operation: Callable[[], Value]) -> tuple[Value, RastroEtapa]:
         start = perf_counter()
         output = operation()
-        traces.append(
-            RastroEtapa(
-                etapa=name,
-                duracao_ms=round((perf_counter() - start) * 1000, 3),
-                entrada_sha256=digest(inputs),
-                saida_sha256=digest(output),
-            )
+        trace = RastroEtapa(
+            etapa=name,
+            duracao_ms=round((perf_counter() - start) * 1000, 3),
+            entrada_sha256=digest(inputs),
+            saida_sha256=digest(output),
         )
+        return output, trace
+
+    def step(name: str, inputs, operation: Callable[[], Value]) -> Value:
+        output, trace = measure(name, inputs, operation)
+        traces.append(trace)
         return output
 
     order = step(
@@ -103,28 +139,39 @@ def executar_pipeline_analise(
     }
     llm = None if settings.mock_llm else GeminiAgents(settings)
     try:
-        evidence = step(
-            "analista_evidencias",
-            evidence_context,
-            lambda: (
-                analisar_evidencias(caso, order)
-                if llm is None
-                else llm.generate(
-                    "evidencias", PROMPTS["evidencias"], evidence_context, ParecerEvidencias
-                )
-            ),
-        )
-        policies = step(
-            "analista_politicas",
-            policy_context,
-            lambda: (
-                analisar_politicas(caso, order, excerpts)
-                if llm is None
-                else llm.generate(
-                    "politicas", PROMPTS["politicas"], policy_context, ParecerPoliticas
-                )
-            ),
-        )
+        # Independentes entre si: concorrentes. O `with` só sai após ambas terminarem, então
+        # uma falha em uma delas propaga (502) sem deixar chamada pendente ao fechar o cliente.
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="agente") as pool:
+            evidence_future = pool.submit(
+                measure,
+                "analista_evidencias",
+                evidence_context,
+                lambda: (
+                    analisar_evidencias(caso, order)
+                    if llm is None
+                    else llm.generate(
+                        "evidencias", PROMPTS["evidencias"], evidence_context, ParecerEvidencias
+                    )
+                ),
+            )
+            policy_future = pool.submit(
+                measure,
+                "analista_politicas",
+                policy_context,
+                lambda: (
+                    analisar_politicas(caso, order, excerpts)
+                    if llm is None
+                    else hidratar_citacoes(
+                        llm.generate(
+                            "politicas", PROMPTS["politicas"], policy_context, RespostaPoliticas
+                        ),
+                        excerpts,
+                    )
+                ),
+            )
+            evidence, evidence_trace = evidence_future.result()
+            policies, policy_trace = policy_future.result()
+        traces.extend([evidence_trace, policy_trace])
         coordinator_context = {
             **evidence_context,
             "parecer_evidencias": evidence.model_dump(mode="json"),

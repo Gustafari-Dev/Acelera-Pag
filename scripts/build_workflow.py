@@ -10,7 +10,7 @@ from app.core.schemas import (
     CasoEntrada,
     ParecerCoordenador,
     ParecerEvidencias,
-    ParecerPoliticas,
+    RespostaPoliticas,
     ResultadoAnalise,
     ValidacaoEntrada,
 )
@@ -37,7 +37,7 @@ def build() -> dict:
     prompts = PROMPTS
     classes = {
         "evidencias": ParecerEvidencias,
-        "politicas": ParecerPoliticas,
+        "politicas": RespostaPoliticas,
         "coordenador": ParecerCoordenador,
     }
     schemas = {name: inline_schema(model.model_json_schema()) for name, model in classes.items()}
@@ -56,12 +56,14 @@ def build() -> dict:
         "# Agentes Python: arquitetura, prompts e contratos\n",
         f"Prompts {VERSAO_PROMPTS}, gerados diretamente de `app/agents/prompts.py`. "
         "Edite essa fonte e rode `python -m scripts.build_workflow`.\n",
-        "O pipeline Python executa Evidências -> Políticas -> Coordenador -> "
-        "Validador determinístico. Usa `google-genai`, `generate_content` e "
+        "O pipeline Python executa Evidências e Políticas em paralelo, depois "
+        "Coordenador -> Validador determinístico. Usa `google-genai`, `generate_content` e "
         "`response_schema` Pydantic. Sem chave ou com USE_MOCK_LLM=true, usa "
         "o fallback de `scripts/mock_agents.py`.\n",
-        "Relatos e fontes são dados não confiáveis. As citações são copiadas "
-        "integralmente e conferidas pelo validador. O n8n apenas chama "
+        "Relatos e fontes são dados não confiáveis. O Analista de Políticas devolve "
+        "só a referência (documento, versao, secao); o backend anexa trecho e sha256 "
+        "dos chunks recuperados, rejeita referências fora deles e o validador confere "
+        "tudo contra o catálogo. O n8n apenas chama "
         "POST /casos/analisar e encaminha o resultado.\n",
         "Cada resposta inclui hashes dos prompts, entradas e saídas das etapas, "
         "modelo, modo, datas e tempos de execução. Respostas inválidas ou falhas "

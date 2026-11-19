@@ -119,6 +119,31 @@ class ParecerPoliticas(Schema):
     elegivel_automatico: StrictBool
     fundamentacao: str
     citacoes: list[Citacao]
+    # Referências devolvidas pelo LLM que não estão entre os trechos recuperados nesta
+    # análise ("documento/versao/secao"). Qualquer item aqui bloqueia a execução.
+    citacoes_rejeitadas: list[str] = Field(default_factory=list)
+
+
+class ReferenciaCitacao(Schema):
+    """Citação como o LLM a devolve: só a chave; trecho e sha256 vêm do RAG."""
+
+    documento: str
+    versao: str
+    secao: str
+    relevancia: Annotated[str, Field(max_length=300)]
+
+    @property
+    def key(self) -> tuple[str, str, str]:
+        return self.documento, self.versao, self.secao
+
+
+class RespostaPoliticas(Schema):
+    """Saída bruta do Analista de Políticas, antes da hidratação das citações."""
+
+    dias_desde_entrega: Annotated[int, Field(strict=True)]
+    elegivel_automatico: StrictBool
+    fundamentacao: str
+    citacoes: list[ReferenciaCitacao]
 
 
 class ParecerCoordenador(Schema):
